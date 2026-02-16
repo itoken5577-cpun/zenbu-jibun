@@ -14,10 +14,13 @@ from line_parser import load_line_file
 from privacy import preprocess_text
 from classify_rules import (
     classify_to_json,
-    COMM_STYLE_LABELS, THINK_STYLE_LABELS,
-    COMM_STYLE_DISPLAY, THINK_STYLE_DISPLAY
+    COMM_STYLE_LABELS,
+    THINK_STYLE_LABELS,
+    COMM_STYLE_DISPLAY,
+    THINK_STYLE_DISPLAY,
 )
-, THINK_STYLE_LABELS
+
+
 from db import (
     init_db, upsert_messages_batch, upsert_labels_batch,
     fetch_my_messages_with_labels, fetch_sources, get_db_stats, delete_source,
