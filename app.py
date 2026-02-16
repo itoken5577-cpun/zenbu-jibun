@@ -326,12 +326,14 @@ with tab2:
             st.metric("トークルーム数", len(counterparties))
         with c3:
             sd = g.get("style_dist", {})
-            ts = max(sd, key=sd.get) if sd else "—"
-            st.metric("最頻コミュスタイル", ts, f"{sd.get(ts, 0):.0%}")
+            ts_key = max(sd, key=sd.get) if sd else None
+            ts = COMM_STYLE_DISPLAY.get(ts_key, "—") if ts_key else "—"
+            st.metric("最頻コミュスタイル", ts, f"{sd.get(ts_key, 0):.0%}" if ts_key else "—")
         with c4:
             td = g.get("think_dist", {})
-            tt = max(td, key=td.get) if td else "—"
-            st.metric("最頻思考スタイル", tt, f"{td.get(tt, 0):.0%}")
+            tt_key = max(td, key=td.get) if td else None
+            tt = THINK_STYLE_DISPLAY.get(tt_key, "—") if tt_key else "—"
+            st.metric("最頻思考スタイル", tt, f"{td.get(tt_key, 0):.0%}" if tt_key else "—")
 
         # ── 全相手の比較グラフ ──
         st.subheader("🎨 コミュニケーションスタイル分布")
@@ -355,11 +357,12 @@ with tab2:
             if sel == "（全相手を比較）":
                 tab_cs, tab_ts = st.tabs(["コミュニケーションスタイル", "思考スタイル"])
                 with tab_cs:
-                    disp = df_style[COMM_STYLE_LABELS].map(lambda x: f"{float(x):.1%}")
+                    disp = df_style[COMM_STYLE_LABELS].rename(columns=COMM_STYLE_DISPLAY).map(lambda x: f"{float(x):.1%}")
                     st.dataframe(disp, use_container_width=True)
                 with tab_ts:
-                    disp = df_think[THINK_STYLE_LABELS].map(lambda x: f"{float(x):.1%}")
+                    disp = df_think[THINK_STYLE_LABELS].rename(columns=THINK_STYLE_DISPLAY).map(lambda x: f"{float(x):.1%}")
                     st.dataframe(disp, use_container_width=True)
+
             else:
                 cp_data = dist_result.get(sel, {})
                 g_data = dist_result.get("global", {})
@@ -379,6 +382,7 @@ with tab2:
                                 f"""<div class="metric-card">
                                 <div style="font-size:.75rem;color:#888;">{item['kind']}スタイル</div>
                                 <div style="font-size:1.3rem;font-weight:bold;">{item['label']}</div>
+
                                 <div style="font-size:1.05rem;color:{color};">{sign}{abs(dv):.1%}</div>
                                 </div>""",
                                 unsafe_allow_html=True,
