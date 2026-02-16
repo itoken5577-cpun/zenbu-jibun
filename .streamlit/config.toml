@@ -1,0 +1,28 @@
+[server]
+headless = true
+port = 8501
+
+[browser]
+gatherUsageStats = false
+```
+
+---
+
+## デプロイ手順（Streamlit Cloud）
+```
+1. GitHub に新規リポジトリを作成
+2. 上記ファイルをすべてプッシュ
+   zenbu_jibun/
+     app.py
+     line_parser.py
+     privacy.py
+     classify_rules.py
+     db.py
+     aggregate.py
+     requirements.txt
+     prompts/insight_prompt.txt
+     sample_data/sample_line.txt
+     .streamlit/config.toml
+3. https://share.streamlit.io/ にログイン
+4. "New app" → リポジトリ・ブランチ・Main file path (app.py) を指定
+5. Deploy
