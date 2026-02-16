@@ -41,6 +41,7 @@ st.set_page_config(
 )
 
 init_db()
+USER_ID = get_or_create_user_id()
 st.set_page_config(
     page_title="全部自分",
     page_icon="🪞",
@@ -49,6 +50,8 @@ st.set_page_config(
 )
 
 init_db()
+USER_ID = get_or_create_user_id()
+
 
 # ─────────────────────────────────────
 # user_id の確定（URL uid パラメータ優先）
@@ -377,6 +380,7 @@ def process_files(file_pairs: List[tuple], my_name: str, min_chars: int) -> None
             is_me = 1 if pm.speaker == my_name else 0
             proc_text, noise_flag = preprocess_text(pm.text, min_chars)
             msg_rows.append({
+                "user_id": USER_ID,
                 "source": source,
                 "counterparty": counterparty,
                 "timestamp": pm.timestamp,
@@ -652,7 +656,8 @@ with tab1:
 with tab2:
     st.header("コミュニケーション & 思考スタイル分析")
 
-    messages = fetch_my_messages_with_labels()
+    messages = fetch_my_messages_with_labels(USER_ID)
+
 
     if not messages:
         st.info("データがありません。「取り込み」タブで LINEログを取り込んでください。")
@@ -765,7 +770,8 @@ with tab3:
 
 
     _my_name = st.session_state.get("my_name", "ユーザー")
-    msgs_exp = fetch_my_messages_with_labels()
+    msgs_exp = fetch_my_messages_with_labels(USER_ID)
+
 
     if not msgs_exp:
         st.info("データがありません。「取り込み」タブで LINEログを取り込んでください。")
