@@ -263,3 +263,23 @@ def classify_to_json(text: str) -> Dict:
 # ラベル一覧（順序固定）
 COMM_STYLE_LABELS = ["Ask", "Propose", "Structure", "Empathize", "Explain", "Lead", "Align", "SmallTalk"]
 THINK_STYLE_LABELS = ["Logic", "Other", "Goal", "Risk", "Explore", "Stability"]
+# 表示名（UI用）: 内部キーは英語のまま、表示だけ日本語にする
+COMM_STYLE_DISPLAY = {
+    "Ask": "質問",
+    "Propose": "提案",
+    "Structure": "構造化",
+    "Empathize": "共感",
+    "Explain": "説明",
+    "Lead": "主導",
+    "Align": "合意",
+    "SmallTalk": "雑談",
+}
+
+THINK_STYLE_DISPLAY = {
+    "Logic": "論理",
+    "Other": "他者視点",
+    "Goal": "目的志向",
+    "Risk": "リスク",
+    "Explore": "探索",
+    "Stability": "安定",
+}

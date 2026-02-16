@@ -12,7 +12,12 @@ import altair as alt
 
 from line_parser import load_line_file
 from privacy import preprocess_text
-from classify_rules import classify_to_json, COMM_STYLE_LABELS, THINK_STYLE_LABELS
+from classify_rules import (
+    classify_to_json,
+    COMM_STYLE_LABELS, THINK_STYLE_LABELS,
+    COMM_STYLE_DISPLAY, THINK_STYLE_DISPLAY
+)
+, THINK_STYLE_LABELS
 from db import (
     init_db, upsert_messages_batch, upsert_labels_batch,
     fetch_my_messages_with_labels, fetch_sources, get_db_stats, delete_source,
@@ -327,10 +332,10 @@ with tab2:
 
         # ── 全相手の比較グラフ ──
         st.subheader("🎨 コミュニケーションスタイル分布")
-        render_grouped_bar(df_style, COMM_STYLE_LABELS)
+        render_grouped_bar(df_style.rename(columns=COMM_STYLE_DISPLAY), [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS])
 
         st.subheader("🧠 思考スタイル分布")
-        render_grouped_bar(df_think, THINK_STYLE_LABELS)
+        render_grouped_bar(df_think.rename(columns=THINK_STYLE_DISPLAY), [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS])
 
         # ── 相手別詳細 ──
         st.divider()
