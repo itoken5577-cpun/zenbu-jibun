@@ -402,7 +402,8 @@ with tab3:
 気になる場合は JSON の `display_name` を手動削除してから貼り付けてください。
 
 **使い方：** JSON を生成 → コピー → ChatGPT/Claude に「プロンプト」と共に貼り付け
-    """)
+""")
+
 
     _my_name = st.session_state.get("my_name", "ユーザー")
     msgs_exp = fetch_my_messages_with_labels()
