@@ -265,8 +265,6 @@ THINK_STYLE_GUIDE = {
 # CSS
 # ─────────────────────────────────────
 st.markdown("""
-st.markdown(
-    """
 <style>
 .main-title {
     font-size: 2.4rem;
@@ -288,7 +286,7 @@ st.markdown(
     display:inline-block; margin-bottom:1.2rem;
 }
 
-/* Style Guide */
+/* スタイルガイド用 */
 .guide-card {
     background: #f8f9ff;
     border-left: 4px solid #667eea;
@@ -316,12 +314,8 @@ st.markdown(
     margin-right: 0.4rem;
 }
 </style>
-""",
-    unsafe_allow_html=True,
-)
-
-"""</style>
 """, unsafe_allow_html=True)
+
 
 
 # ─────────────────────────────────────
@@ -781,33 +775,3 @@ with tab3:
 # =============================================
 with tab4:
     render_style_guide_tab()
-```
-
----
-
-## 全体の追記位置まとめ
-```
-app.py
- │
- ├─ st.set_page_config(...)
- ├─ init_db()
- ├─ ★ COMM_STYLE_GUIDE = {...}       ← ② データ定義をここに追加
- ├─ ★ THINK_STYLE_GUIDE = {...}      ← ② データ定義をここに追加
- │
- ├─ st.markdown(CSS)                 ← ① .guide-card 等をCSSブロック内に追加
- │
- ├─ def process_files(...)
- ├─ def render_grouped_bar(...)
- ├─ def render_compare_bar(...)
- ├─ ★ def render_style_guide_card(...) ← ③ 描画関数をここに追加
- ├─ ★ def render_style_guide_tab(...)  ← ③ 描画関数をここに追加
- │
- ├─ # ページヘッダー
- ├─ # サイドバー
- │
- ├─ ★ tab1, tab2, tab3, tab4 = st.tabs([...])  ← タブ定義を変更
- │
- ├─ with tab1: ...
- ├─ with tab2: ...
- ├─ with tab3: ...
- └─ ★ with tab4: render_style_guide_tab()      ← 末尾に追加
