@@ -1,8 +1,4 @@
-"""
-db.py - SQLite によるデータ保存・取得
-"""
 import sqlite3
-import json
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -18,9 +14,11 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 def init_db(db_path: Path = DB_PATH) -> None:
     with get_connection(db_path) as conn:
+        # テーブル新規作成
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS messages (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      TEXT NOT NULL DEFAULT '',
             source       TEXT NOT NULL,
             counterparty TEXT NOT NULL,
             timestamp    TEXT,
@@ -39,10 +37,22 @@ def init_db(db_path: Path = DB_PATH) -> None:
             FOREIGN KEY (message_id) REFERENCES messages(id)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_messages_user_id     ON messages(user_id);
         CREATE INDEX IF NOT EXISTS idx_messages_counterparty ON messages(counterparty);
         CREATE INDEX IF NOT EXISTS idx_messages_is_me        ON messages(is_me);
         CREATE INDEX IF NOT EXISTS idx_messages_source       ON messages(source);
         """)
+
+        # 既存DBへのマイグレーション（user_id列が無ければ追加）
+        cols = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        ]
+        if "user_id" not in cols:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
+            )
+            conn.commit()
 
 
 def upsert_messages_batch(
@@ -53,9 +63,26 @@ def upsert_messages_batch(
         return []
 
     with get_connection(db_path) as conn:
-        sources = list({r["source"] for r in rows})
-        for src in sources:
-            conn.execute("DELETE FROM messages WHERE source = ?", (src,))
+        # 同一 user_id + source の既存データを先に削除（再インポート対応）
+        seen = {(r["user_id"], r["source"]) for r in rows}
+        for uid, src in seen:
+            # 削除対象の message_id を先に取得してラベルも消す
+            old_ids = [
+                r[0] for r in conn.execute(
+                    "SELECT id FROM messages WHERE user_id = ? AND source = ?",
+                    (uid, src),
+                ).fetchall()
+            ]
+            if old_ids:
+                conn.execute(
+                    f"DELETE FROM labels WHERE message_id IN "
+                    f"({','.join('?' * len(old_ids))})",
+                    old_ids,
+                )
+            conn.execute(
+                "DELETE FROM messages WHERE user_id = ? AND source = ?",
+                (uid, src),
+            )
 
         ids = []
         for row in rows:
@@ -63,9 +90,11 @@ def upsert_messages_batch(
             if isinstance(ts, datetime):
                 ts = ts.isoformat()
             cur = conn.execute(
-                """INSERT INTO messages (source, counterparty, timestamp, speaker, is_me, text)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO messages
+                   (user_id, source, counterparty, timestamp, speaker, is_me, text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    row["user_id"],
                     row["source"],
                     row["counterparty"],
                     ts,
@@ -88,7 +117,8 @@ def upsert_labels_batch(
     with get_connection(db_path) as conn:
         conn.executemany(
             """INSERT OR REPLACE INTO labels
-               (message_id, style_primary, think_primary, style_score_json, think_score_json)
+               (message_id, style_primary, think_primary,
+                style_score_json, think_score_json)
                VALUES (:message_id, :style_primary, :think_primary,
                        :style_score_json, :think_score_json)""",
             label_rows,
@@ -97,6 +127,7 @@ def upsert_labels_batch(
 
 
 def fetch_my_messages_with_labels(
+    user_id: str,
     db_path: Path = DB_PATH,
 ) -> List[Dict[str, Any]]:
     with get_connection(db_path) as conn:
@@ -108,51 +139,74 @@ def fetch_my_messages_with_labels(
                FROM messages m
                LEFT JOIN labels l ON m.id = l.message_id
                WHERE m.is_me = 1
-               ORDER BY m.counterparty, m.timestamp"""
+                 AND m.user_id = ?
+               ORDER BY m.counterparty, m.timestamp""",
+            (user_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def fetch_sources(db_path: Path = DB_PATH) -> List[str]:
+def fetch_sources(
+    user_id: str,
+    db_path: Path = DB_PATH,
+) -> List[str]:
     with get_connection(db_path) as conn:
         rows = conn.execute(
-            "SELECT DISTINCT source FROM messages ORDER BY source"
+            "SELECT DISTINCT source FROM messages WHERE user_id = ? ORDER BY source",
+            (user_id,),
         ).fetchall()
     return [r["source"] for r in rows]
 
 
-def fetch_counterparties(db_path: Path = DB_PATH) -> List[str]:
-    with get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT counterparty FROM messages ORDER BY counterparty"
-        ).fetchall()
-    return [r["counterparty"] for r in rows]
-
-
-def delete_source(source: str, db_path: Path = DB_PATH) -> int:
+def delete_source(
+    user_id: str,
+    source: str,
+    db_path: Path = DB_PATH,
+) -> int:
     with get_connection(db_path) as conn:
         ids = [
             r[0]
             for r in conn.execute(
-                "SELECT id FROM messages WHERE source = ?", (source,)
+                "SELECT id FROM messages WHERE user_id = ? AND source = ?",
+                (user_id, source),
             ).fetchall()
         ]
         if ids:
             conn.execute(
-                f"DELETE FROM labels WHERE message_id IN ({','.join('?' * len(ids))})",
+                f"DELETE FROM labels WHERE message_id IN "
+                f"({','.join('?' * len(ids))})",
                 ids,
             )
-        conn.execute("DELETE FROM messages WHERE source = ?", (source,))
+        conn.execute(
+            "DELETE FROM messages WHERE user_id = ? AND source = ?",
+            (user_id, source),
+        )
         conn.commit()
     return len(ids)
 
 
-def get_db_stats(db_path: Path = DB_PATH) -> Dict[str, int]:
+def get_db_stats(
+    user_id: str,
+    db_path: Path = DB_PATH,
+) -> Dict[str, int]:
     with get_connection(db_path) as conn:
-        total    = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        mine     = conn.execute("SELECT COUNT(*) FROM messages WHERE is_me=1").fetchone()[0]
-        labeled  = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
-        sources  = conn.execute("SELECT COUNT(DISTINCT source) FROM messages").fetchone()[0]
+        total = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        mine = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE user_id = ? AND is_me = 1",
+            (user_id,),
+        ).fetchone()[0]
+        labeled = conn.execute(
+            """SELECT COUNT(*) FROM labels l
+               JOIN messages m ON l.message_id = m.id
+               WHERE m.user_id = ?""",
+            (user_id,),
+        ).fetchone()[0]
+        sources = conn.execute(
+            "SELECT COUNT(DISTINCT source) FROM messages WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
     return {
         "total_messages":   total,
         "my_messages":      mine,

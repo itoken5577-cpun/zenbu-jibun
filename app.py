@@ -41,6 +41,37 @@ st.set_page_config(
 )
 
 init_db()
+st.set_page_config(
+    page_title="全部自分",
+    page_icon="🪞",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+init_db()
+
+# ─────────────────────────────────────
+# user_id の確定（URL uid パラメータ優先）
+# ─────────────────────────────────────
+import uuid
+
+def get_or_create_user_id() -> str:
+    if "user_id" in st.session_state:
+        return st.session_state["user_id"]
+
+    params = st.query_params
+    if "uid" in params:
+        uid = params["uid"]
+    else:
+        uid = str(uuid.uuid4())
+        st.query_params["uid"] = uid
+
+    st.session_state["user_id"] = uid
+    return uid
+
+USER_ID = get_or_create_user_id()
+
+
 # ─────────────────────────────────────
 # スタイルガイド データ定義
 # ─────────────────────────────────────
@@ -534,6 +565,8 @@ st.markdown(
 # ─────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ 設定")
+
+    st.caption(f"user_id: {USER_ID[:8]}")
 
     my_name = st.text_input(
         "自分の表示名",
