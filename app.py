@@ -627,38 +627,11 @@ with st.expander("🎫 招待リンクを発行する", expanded=False):
     col_gen, col_info = st.columns([1, 2])
     with col_gen:
         if st.button("🔗 新しいリンクを生成", type="primary", use_container_width=True):
-            # 最もシンプルで確実な方法
-            import platform
-            
-            # ローカル環境判定（複数の方法で確認）
-            is_local = False
-            
-            # 方法1: ホスト名チェック
-            hostname = platform.node().lower()
-            if "local" in hostname or "desktop" in hostname or "laptop" in hostname:
-                is_local = True
-            
-            # 方法2: 環境変数チェック
-            if not is_local and not os.getenv("STREAMLIT_SHARING_MODE"):
-                try:
-                    import socket
-                    hostname = socket.gethostname()
-                    if "streamlit" not in hostname.lower():
-                        is_local = True
-                except:
-                    pass
-            
-            # URLを決定
-            if is_local:
-                base_url = "http://localhost:8501"
-            else:
-                base_url = "https://prismee.streamlit.app"
-            
+            base_url = "https://prismee.streamlit.app"
             new_uid = str(uuid.uuid4())
             new_link = f"{base_url}/?uid={new_uid}"
             st.session_state["generated_link"] = new_link
-            st.session_state["generated_uid"] = new_uid      
-
+            st.session_state["generated_uid"] = new_uid
     
     with col_info:
         st.caption("💡 新しいスペースを作成したい場合や、他の人に独立した環境を提供したい場合に使用してください。")
