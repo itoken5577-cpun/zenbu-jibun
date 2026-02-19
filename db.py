@@ -7,10 +7,9 @@ from typing import List, Dict, Any
 DB_PATH = Path(__file__).parent / "zenbu_jibun.db"
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
@@ -60,6 +59,14 @@ def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
 
         conn.commit()
+
+def init_db(db_path: Path = DB_PATH) -> None:
+    with get_connection(db_path) as conn:
+        # ... 既存のコード ...
+        conn.commit()
+    
+    # ✅ ここに追加（インデントに注意：関数の中の一番最後）
+    init_users_table(db_path)
 
 
 def upsert_messages_batch(rows: List[Dict[str, Any]]) -> List[int]:
@@ -211,3 +218,180 @@ def get_db_stats(user_id: str) -> Dict[str, int]:
             "labeled_messages": int(labeled),
             "sources": int(sources),
         }
+
+# ─────────────────────────────────────
+# パスコード認証関連（追加）
+# ─────────────────────────────────────
+import hashlib
+import secrets
+from datetime import datetime, timedelta
+
+
+def _hash_passcode(passcode: str, salt: bytes) -> bytes:
+    """PBKDF2-HMAC-SHA256 でパスコードをハッシュ化"""
+    return hashlib.pbkdf2_hmac("sha256", passcode.encode(), salt, 100000)
+
+
+def init_users_table(db_path: Path = DB_PATH) -> None:
+    """users テーブルを作成（マイグレーション）"""
+    with get_connection(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id       TEXT PRIMARY KEY,
+                pass_salt     BLOB NOT NULL,
+                pass_hash     BLOB NOT NULL,
+                created_at    TEXT DEFAULT (datetime('now','localtime')),
+                updated_at    TEXT DEFAULT (datetime('now','localtime')),
+                failed_count  INTEGER DEFAULT 0,
+                locked_until  TEXT NULL
+            )
+        """)
+        conn.commit()
+
+
+def get_user_auth_state(
+    user_id: str,
+    db_path: Path = DB_PATH,
+) -> Dict[str, Any]:
+    """
+    ユーザーの認証状態を取得
+    戻り値: {
+        "has_pass": bool,
+        "locked_until": str | None,
+        "failed_count": int,
+    }
+    """
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT pass_hash, locked_until, failed_count FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+    if not row:
+        return {
+            "has_pass": False,
+            "locked_until": None,
+            "failed_count": 0,
+        }
+
+    locked_str = row["locked_until"]
+    locked_until = None
+    if locked_str:
+        try:
+            locked_dt = datetime.fromisoformat(locked_str)
+            if locked_dt > datetime.now():
+                locked_until = locked_str
+        except Exception:
+            pass
+
+    return {
+        "has_pass": bool(row["pass_hash"]),
+        "locked_until": locked_until,
+        "failed_count": row["failed_count"],
+    }
+
+
+def set_passcode(
+    user_id: str,
+    passcode: str,
+    db_path: Path = DB_PATH,
+) -> None:
+    """パスコードを設定（初回 or 変更）"""
+    salt = secrets.token_bytes(32)
+    pass_hash = _hash_passcode(passcode, salt)
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO users
+               (user_id, pass_salt, pass_hash, updated_at, failed_count, locked_until)
+               VALUES (?, ?, ?, datetime('now','localtime'), 0, NULL)""",
+            (user_id, salt, pass_hash),
+        )
+        conn.commit()
+
+
+def verify_passcode(
+    user_id: str,
+    passcode: str,
+    lock_duration_minutes: int = 10,
+    max_attempts: int = 5,
+    db_path: Path = DB_PATH,
+) -> Dict[str, Any]:
+    """
+    パスコードを検証
+    戻り値: {
+        "success": bool,
+        "message": str,
+        "locked_until": str | None,
+    }
+    """
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT pass_salt, pass_hash, failed_count, locked_until FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        if not row:
+            return {
+                "success": False,
+                "message": "パスコードが設定されていません",
+                "locked_until": None,
+            }
+
+        # ロック確認
+        locked_str = row["locked_until"]
+        if locked_str:
+            try:
+                locked_dt = datetime.fromisoformat(locked_str)
+                if locked_dt > datetime.now():
+                    return {
+                        "success": False,
+                        "message": f"ロック中です（{locked_dt.strftime('%H:%M')}まで）",
+                        "locked_until": locked_str,
+                    }
+            except Exception:
+                pass
+
+        # パスコード検証
+        salt = row["pass_salt"]
+        stored_hash = row["pass_hash"]
+        input_hash = _hash_passcode(passcode, salt)
+
+        if secrets.compare_digest(input_hash, stored_hash):
+            # 成功：failed_count リセット
+            conn.execute(
+                "UPDATE users SET failed_count = 0, locked_until = NULL WHERE user_id = ?",
+                (user_id,),
+            )
+            conn.commit()
+            return {
+                "success": True,
+                "message": "認証成功",
+                "locked_until": None,
+            }
+        else:
+            # 失敗：カウント増加
+            new_count = row["failed_count"] + 1
+            locked_until = None
+
+            if new_count >= max_attempts:
+                locked_dt = datetime.now() + timedelta(minutes=lock_duration_minutes)
+                locked_until = locked_dt.isoformat()
+                conn.execute(
+                    "UPDATE users SET failed_count = ?, locked_until = ? WHERE user_id = ?",
+                    (new_count, locked_until, user_id),
+                )
+                msg = f"{max_attempts}回失敗しました。{lock_duration_minutes}分間ロックされます。"
+            else:
+                conn.execute(
+                    "UPDATE users SET failed_count = ? WHERE user_id = ?",
+                    (new_count, user_id),
+                )
+                msg = f"パスコードが違います（残り{max_attempts - new_count}回）"
+
+            conn.commit()
+            return {
+                "success": False,
+                "message": msg,
+                "locked_until": locked_until,
+            }
