@@ -449,12 +449,7 @@ def render_grouped_bar(
             y=alt.Y("比率:Q", axis=alt.Axis(format=".0%"), title="割合"),
             color=alt.Color(
                 "counterparty:N",
-                legend=alt.Legend(
-                    title="トークルーム",
-                    orient="bottom" if compact else "right",
-                    direction="horizontal" if compact else "vertical",
-                    columns=1 if compact else None,
-                ),
+                legend=None if compact else alt.Legend(title="トークルーム"),
                 sort=order,
             ),
             xOffset="counterparty:N",
