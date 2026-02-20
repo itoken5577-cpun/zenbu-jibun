@@ -596,7 +596,9 @@ def render_style_guide_card(key: str, data: dict) -> None:
                 )
 
 def render_top3_summary_for_guide(user_id: str) -> None:
-    """スタイルガイド冒頭に表示する：あなたのTop3（全体=global）"""
+    """スタイルガイド冒頭に表示する：あなたのTop3（全体=global）
+    PCは2列、スマホは縦並びに自動対応。
+    """
     messages = fetch_my_messages_with_labels(user_id)
     if not messages:
         st.info("データがないため、Top3は表示できません。まずは「取り込み」タブでLINEログを取り込んでください。")
@@ -611,32 +613,90 @@ def render_top3_summary_for_guide(user_id: str) -> None:
     top_comm = sorted(sd.items(), key=lambda x: float(x[1]), reverse=True)[:3] if sd else []
     top_think = sorted(td.items(), key=lambda x: float(x[1]), reverse=True)[:3] if td else []
 
-    st.subheader("あなたの全体傾向（Top3）")
-    st.caption("※ 全トークルームを合算した傾向（global）です。単位：%")
-    col1, col2 = st.columns(2)
-
     def fmt_pct(v: float) -> str:
         return f"{float(v) * 100:.1f}%"
 
-    with col1:
-        st.markdown("### 🗣️ コミュニケーション Top3")
-        if not top_comm:
-            st.write("—")
+    # --- スマホ判定（CSSで幅を見てレイアウトを切り替え）---
+    # StreamlitはPython側で確実な画面幅取得が難しいので、
+    # 1) CSSでスマホ時は「2列」レイアウトを縦に
+    # 2) さらにカード風で読みやすく
+    st.markdown(
+        """
+        <style>
+        /* Top3をカード風に */
+        .top3-card {
+            background: #f8f9ff;
+            border: 1px solid #e8eaf6;
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin-bottom: 12px;
+        }
+        .top3-title {
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+        }
+        .top3-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px dashed #e8eaf6;
+            font-size: 0.98rem;
+        }
+        .top3-item:last-child { border-bottom: none; }
+        .top3-rank { font-weight: 800; }
+        .top3-name { font-weight: 600; }
+        .top3-val { font-variant-numeric: tabular-nums; font-weight: 800; }
+        /* スマホは余白を少し詰める */
+        @media (max-width: 640px) {
+            .top3-card { padding: 12px 12px; border-radius: 12px; }
+            .top3-item { font-size: 0.95rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("あなたの全体傾向（Top3）")
+    st.caption("※ 全トークルームを合算した傾向（global）です。単位：%")
+
+    # ここはcolumnsを使うが、スマホでは自動的に縦積みになりやすい＋カードで視認性を確保
+    col1, col2 = st.columns(2)
+
+    def render_card(title: str, items: list, display_map: dict) -> None:
+        if not items:
+            body = '<div class="top3-item"><span class="top3-name">—</span><span class="top3-val"> </span></div>'
         else:
-            for i, (k, v) in enumerate(top_comm, 1):
-                name = COMM_STYLE_DISPLAY.get(k, k)
-                st.markdown(f"**{i}. {name}**　{fmt_pct(v)}")
+            rows = []
+            for i, (k, v) in enumerate(items, 1):
+                name = display_map.get(k, k)
+                rows.append(
+                    f'<div class="top3-item">'
+                    f'<span class="top3-name"><span class="top3-rank">{i}.</span> {name}</span>'
+                    f'<span class="top3-val">{fmt_pct(v)}</span>'
+                    f'</div>'
+                )
+            body = "".join(rows)
+
+        st.markdown(
+            f'''
+            <div class="top3-card">
+              <div class="top3-title">{title}</div>
+              {body}
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+
+    with col1:
+        render_card("🗣️ コミュニケーション Top3", top_comm, COMM_STYLE_DISPLAY)
 
     with col2:
-        st.markdown("### 🧠 思考 Top3")
-        if not top_think:
-            st.write("—")
-        else:
-            for i, (k, v) in enumerate(top_think, 1):
-                name = THINK_STYLE_DISPLAY.get(k, k)
-                st.markdown(f"**{i}. {name}**　{fmt_pct(v)}")
+        render_card("🧠 思考 Top3", top_think, THINK_STYLE_DISPLAY)
 
     st.divider()
+
 
 
 def render_style_guide_tab() -> None:
