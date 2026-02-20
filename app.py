@@ -833,11 +833,12 @@ with tab2:
                 def render_table_with_global_fixed(df: pd.DataFrame, labels: List[str], rename_map: Dict[str, str]):
                     table = df[labels].rename(columns=rename_map).copy()
 
-                    # global 行とそれ以外に分割
+                    # ✅ ここで 100倍（表示用）
+                    table = table * 100
+
                     global_row = table.loc[["global"]] if "global" in table.index else None
                     others = table.drop(index=["global"], errors="ignore")
 
-                    # ✅ 固定表示：global（1行だけ）
                     if global_row is not None:
                         st.caption("📌 global（全体平均）は固定表示")
                         st.dataframe(
@@ -845,23 +846,23 @@ with tab2:
                             use_container_width=True,
                             hide_index=False,
                             column_config={
-                                col: st.column_config.NumberColumn(format="%.1f%%")
+                                col: st.column_config.NumberColumn(format="%.1f")
                                 for col in global_row.columns
                             },
                         )
                         st.markdown("")
 
-                    # ✅ ソート可能：残り
-                    st.caption("⬇️ 以降はクリックで数値ソートできます")
+                    st.caption("⬇️ 以降はクリックで数値ソートできます（単位：%）")
                     st.dataframe(
                         others,
                         use_container_width=True,
                         hide_index=False,
                         column_config={
-                            col: st.column_config.NumberColumn(format="%.1f%%")
+                            col: st.column_config.NumberColumn(format="%.1f")
                             for col in others.columns
                         },
                     )
+
 
                 with tab_cs:
                     render_table_with_global_fixed(df_style, COMM_STYLE_LABELS, COMM_STYLE_DISPLAY)
