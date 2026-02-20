@@ -420,18 +420,43 @@ def process_files(file_pairs: List[tuple], my_name: str, min_chars: int, user_id
         st.caption(f"ℹ️ パースできなかった行: 合計 {total_skip_lines} 行")
 
 
-def render_grouped_bar(df: pd.DataFrame, labels: List[str]) -> None:
+def render_grouped_bar(
+    df: pd.DataFrame,
+    labels: List[str],
+    compact: bool = False,
+) -> None:
+    """
+    grouped bar chart（スマホ向けに凡例/ラベル角度/高さを調整可能）
+    df: index=counterparty の DataFrame（各列がラベル）
+    labels: 表示する列順
+    compact: True のときスマホ想定
+    """
     df_reset = df[labels].reset_index()
+
+    # index名が counterparty でない可能性に備えて保険
+    if "counterparty" not in df_reset.columns:
+        df_reset = df_reset.rename(columns={df_reset.columns[0]: "counterparty"})
+
     df_melt = df_reset.melt(id_vars="counterparty", var_name="ラベル", value_name="比率")
+
     order = ["global"] + [c for c in df_reset["counterparty"].tolist() if c != "global"]
 
-    chart = (
+    base = (
         alt.Chart(df_melt)
         .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
         .encode(
-            x=alt.X("ラベル:N", sort=labels, title=None),
+            x=alt.X("ラベル:N", sort=labels, title=None, axis=alt.Axis(labelAngle=45 if compact else 0)),
             y=alt.Y("比率:Q", axis=alt.Axis(format=".0%"), title="割合"),
-            color=alt.Color("counterparty:N", legend=alt.Legend(title="トークルーム"), sort=order),
+            color=alt.Color(
+                "counterparty:N",
+                legend=alt.Legend(
+                    title="トークルーム",
+                    orient="bottom" if compact else "right",
+                    direction="horizontal" if compact else "vertical",
+                    columns=1 if compact else None,
+                ),
+                sort=order,
+            ),
             xOffset="counterparty:N",
             tooltip=[
                 alt.Tooltip("counterparty:N", title="トークルーム"),
@@ -439,11 +464,11 @@ def render_grouped_bar(df: pd.DataFrame, labels: List[str]) -> None:
                 alt.Tooltip("比率:Q", title="割合", format=".1%"),
             ],
         )
-        .properties(height=270)
-        .configure_axis(labelFontSize=12)
+        .properties(height=360 if compact else 270)
+        .configure_axis(labelFontSize=11)
     )
-    st.altair_chart(chart, use_container_width=True)
 
+    st.altair_chart(base, use_container_width=True)
 
 def render_compare_bar(cp_dist: Dict, global_dist: Dict, labels: List[str], cp_name: str) -> None:
     rows = []
@@ -881,23 +906,16 @@ with tab2:
         st.subheader("🎨 コミュニケーションスタイル分布")
         render_grouped_bar(
             df_style_view.rename(columns=COMM_STYLE_DISPLAY),
-            [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS]
+            [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS],
+            compact=compact_mode,
         )
         st.subheader("🧠 思考スタイル分布")
         render_grouped_bar(
             df_think_view.rename(columns=THINK_STYLE_DISPLAY),
-            [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS]
+            [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS],
+            compact=compact_mode,
         )
-        chart = chart.configure_axisX(labelAngle=45)  # ← これ追加（縦すぎ防止）
 
-        # 凡例を下へ（スマホ向け）
-        chart = chart.configure_legend(
-            orient="bottom",
-            direction="horizontal",
-            titleFontSize=11,
-            labelFontSize=10,
-            columns=1
-        )
 
         st.divider()
         st.subheader("👤 相手別スタイル詳細")
