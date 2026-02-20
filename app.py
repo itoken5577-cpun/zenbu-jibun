@@ -623,18 +623,23 @@ def render_top3_summary_for_guide(user_id: str) -> None:
     st.markdown(
         """
         <style>
-        /* Top3をカード風に */
+        /* Top3をカード風に（ダークモードでも文字が消えないように色を固定） */
         .top3-card {
             background: #f8f9ff;
             border: 1px solid #e8eaf6;
             border-radius: 14px;
             padding: 14px 16px;
             margin-bottom: 12px;
+
+            /* ★重要：カード内の文字色を固定（ダークモード対策） */
+            color: #111827; /* slate-900 */
         }
         .top3-title {
             font-size: 1.05rem;
             font-weight: 800;
             margin: 0 0 8px 0;
+
+            color: #111827;
         }
         .top3-item {
             display: flex;
@@ -643,11 +648,14 @@ def render_top3_summary_for_guide(user_id: str) -> None:
             padding: 6px 0;
             border-bottom: 1px dashed #e8eaf6;
             font-size: 0.98rem;
+
+            color: #111827;
         }
         .top3-item:last-child { border-bottom: none; }
-        .top3-rank { font-weight: 800; }
-        .top3-name { font-weight: 600; }
-        .top3-val { font-variant-numeric: tabular-nums; font-weight: 800; }
+        .top3-rank { font-weight: 800; color: #111827; }
+        .top3-name { font-weight: 600; color: #111827; }
+        .top3-val  { font-variant-numeric: tabular-nums; font-weight: 800; color: #111827; }
+
         /* スマホは余白を少し詰める */
         @media (max-width: 640px) {
             .top3-card { padding: 12px 12px; border-radius: 12px; }
