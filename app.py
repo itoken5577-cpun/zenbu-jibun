@@ -10,6 +10,9 @@ from typing import List, Dict, Any
 
 import pandas as pd
 import streamlit as st
+
+st.write("DEPLOY CHECK: 2026-02-21_0001")
+
 import altair as alt
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
