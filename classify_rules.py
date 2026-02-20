@@ -1,285 +1,402 @@
 """
-classify_rules.py - ルールベースのスタイル/思考スタイル分類
-スコア方式: キーワード・記号・構造で各ラベルにスコアを付与
+classify_rules.py - 13軸スコアリング（詳細マーカー辞書版）
 """
+from typing import Dict, List
+from collections import defaultdict
 import re
-import json
-from typing import Dict, Tuple, List
 
-# ======================================================
-# コミュニケーションスタイル（8ラベル）
-# ======================================================
-COMM_STYLE_RULES: Dict[str, dict] = {
-    "Ask": {
-        "patterns": [
-            r"[？?]",
-            r"ですか[？?]?",
-            r"でしょうか",
-            r"どう(思う|ですか|でしょう)",
-            r"(教えて|聞かせて|確認)",
-            r"ですよね[？?]?",
-            r"(いつ|どこ|誰|何|なぜ|どれ|どうして|どんな)",
-            r"(知ってる|わかる|できる)\??",
-            r"かな[？?]?$",
-        ],
-        "bonus_patterns": [r"[？?].*[？?]"],
-        "weights": [2, 2, 2, 2, 2, 1, 2, 1, 1],
-        "bonus_weights": [1],
-    },
-    "Propose": {
-        "patterns": [
-            r"(どうかな|どうでしょう|いかがでしょう)",
-            r"(提案|案|アイデア|考え)",
-            r"(してみ(ては|たら)|やってみ(ては|たら))",
-            r"(試して|試みて|試してみ)",
-            r"(〜はどう|〜はいかが|〜にしない[?？]?)",
-            r"(こういう|こんな感じ)(で|に)(は|も)?",
-            r"(方がいい|ほうがいい|のでは|と思う)",
-            r"(案として|方法として|選択肢)",
-        ],
-        "weights": [2, 2, 2, 1, 2, 1, 1, 2],
-    },
-    "Structure": {
-        "patterns": [
-            r"^\s*[①②③④⑤⑥⑦⑧⑨⑩]",
-            r"^\s*[1-9][.．、。]",
-            r"^\s*[-・•▶▷→]\s",
-            r"(まず|次に|最後に|第[一二三四五]に)",
-            r"(整理すると|まとめると|要点は|ポイントは)",
-            r"(以下の通り|以下をご確認|下記の)",
-            r"(項目|リスト|一覧|ステップ)",
-            r"\n.*\n.*\n",
-        ],
-        "weights": [3, 3, 2, 2, 3, 2, 2, 2],
-    },
-    "Empathize": {
-        "patterns": [
-            r"(つらい|辛い|大変|しんどい|疲れ)",
-            r"(嬉しい|うれしい|よかった|ありがとう|感謝)",
-            r"(心配|不安|怖い|こわい)",
-            r"(わかる|わかるよ|わかります|共感)",
-            r"(ほんとに|本当に|本当うれし|本当よかった)",
-            r"(お疲れ|お疲れ様|ねぎら)",
-            r"(大丈夫[？?]?|気をつけて|無理しないで)",
-            r"(応援|サポート|力になる|一緒に)",
-            r"[！!]{2,}",
-        ],
-        "weights": [2, 2, 2, 2, 2, 2, 2, 2, 1],
-    },
-    "Explain": {
-        "patterns": [
-            r"(なぜなら|理由は|背景は|というのも)",
-            r"(つまり|すなわち|言い換えると|要するに)",
-            r"(例えば|たとえば|具体的には)",
-            r"(仕組み|メカニズム|原因|結果)",
-            r"(説明|解説|詳細|補足)",
-            r"(〜とは|というのは|意味は)",
-            r"(なお|ちなみに|補足すると|付け加えると)",
-            r"(〜のため|〜によって|〜の結果)",
-        ],
-        "weights": [2, 2, 2, 2, 2, 2, 1, 1],
-    },
-    "Lead": {
-        "patterns": [
-            r"(してください|お願いします|お願いいたします)",
-            r"(やっておいて|対応して|確認して)",
-            r"(決定|決めた|確定|決まった|方針)",
-            r"(〜すべき|〜必要|〜しないと|〜してほしい)",
-            r"(担当|役割|責任|タスク)",
-            r"(指示|連絡|報告|共有)して",
-            r"(期限|締め切り|デッドライン|いつまでに)",
-            r"(進めて|進捗|対応|実行)",
-        ],
-        "weights": [2, 2, 2, 2, 2, 2, 2, 2],
-    },
-    "Align": {
-        "patterns": [
-            r"^(了解|りょ|OK|ok|承知|承りました|わかりました|わかった)",
-            r"(そうですね|そうだね|そうかも|たしかに|確かに)",
-            r"(賛成|同意|同感|おっしゃる通り)",
-            r"(合わせます|調整します|検討します|考えます)",
-            r"(〜ですね[！!。]|〜ですよね)",
-            r"(いいね[！!]?|いいと思|良いと思)",
-            r"(よろしく(お願いします)?|よろです)",
-        ],
-        "weights": [3, 2, 2, 2, 1, 2, 2],
-    },
-    "SmallTalk": {
-        "patterns": [
-            r"^(おはよ|おはよう|こんにちは|こんばんは|お疲れ|ただいま|おやすみ)",
-            r"(笑|w+|草|ｗ+)",
-            r"(なんか|なんだか|なんとなく)",
-            r"(今日|昨日|明日)(は|も|の)?(どう|何|暇|時間)",
-            r"(〜じゃん|〜だよね|〜だよ|〜だね)$",
-            r"(ご飯|飲み|遊び|映画|買い物)(いこ|しよ|どう)",
-            r"(ありがとう|さんきゅ|ありがと)[！!。]?$",
-            r"(久しぶり|お久しぶり)",
-        ],
-        "weights": [3, 2, 1, 2, 1, 2, 2, 2],
-    },
+
+# ─────────────────────────────────────
+# 13軸の定義
+# ─────────────────────────────────────
+
+# コミュニケーション軸（7軸）
+COMM_STYLE_LABELS = [
+    "Lead_Directiveness",      # 主導性
+    "Collaboration",           # 協調性
+    "Active_Listening",        # 傾聴性
+    "Logical_Expression",      # 論理表出性
+    "Emotional_Expression",    # 感情表出性
+    "Empathy_Care",           # 配慮・共感性
+    "Brevity",                # 簡潔性（参考）
+]
+
+COMM_STYLE_DISPLAY = {
+    "Lead_Directiveness": "主導性",
+    "Collaboration": "協調性",
+    "Active_Listening": "傾聴性",
+    "Logical_Expression": "論理表出性",
+    "Emotional_Expression": "感情表出性",
+    "Empathy_Care": "配慮・共感性",
+    "Brevity": "簡潔性",
 }
 
-# ======================================================
-# 思考スタイル（6ラベル）
-# ======================================================
-THINK_STYLE_RULES: Dict[str, dict] = {
-    "Logic": {
-        "patterns": [
-            r"(なぜなら|理由|原因|根拠|証拠|データ)",
-            r"(したがって|よって|ゆえに|そのため|だから)",
-            r"(AならばB|もし〜なら|前提|仮定)",
-            r"(比較|対比|一方|他方|逆に|反対に)",
-            r"(論理|筋道|整合|矛盾|一貫)",
-            r"(分析|検証|考察|評価|判断)",
-            r"(数字|数値|割合|パーセント|統計)",
-            r"\d+(\.\d+)?[%％]",
-        ],
-        "weights": [2, 2, 2, 2, 2, 2, 2, 2],
-    },
-    "Other": {
-        "patterns": [
-            r"(相手|あなた|あなたの|君|あなたが)(は|に|の|が|を)",
-            r"(みんな|周り|チーム|メンバー|仲間)",
-            r"(立場|視点|目線|観点|感じ方)",
-            r"(相手の気持ち|相手目線|他者|ユーザー)",
-            r"(配慮|気遣い|思いやり|気にする)",
-            r"(伝わる|伝えたい|わかってもらえる|理解してもらえる)",
-        ],
-        "weights": [2, 2, 2, 3, 2, 2],
-    },
-    "Goal": {
-        "patterns": [
-            r"(目標|目的|ゴール|KPI|指標|成果)",
-            r"(達成|クリア|完了|完成|実現)",
-            r"(〜するために|〜を目指して|〜のために)",
-            r"(戦略|計画|ロードマップ|スケジュール)",
-            r"(優先|最優先|まず|まずは|一番大事)",
-            r"(成功|成果|結果|アウトプット|output)",
-            r"(期待|期待値|見込み|予定)",
-        ],
-        "weights": [3, 2, 2, 2, 2, 2, 1],
-    },
-    "Risk": {
-        "patterns": [
-            r"(リスク|危険|危機|問題|課題|懸念|懸念点)",
-            r"(失敗|ミス|エラー|バグ|不具合)",
-            r"(注意|気をつけ|確認して|チェック)(が必要|しないと|しよう)?",
-            r"(〜しないと|〜してしまう|〜になりかねない)",
-            r"(対策|回避|防止|予防|最悪)",
-            r"(遅延|遅れ|超過|オーバー|間に合わない)",
-            r"(想定外|予期しない|万が一|もしも)",
-        ],
-        "weights": [3, 2, 2, 2, 2, 2, 2],
-    },
-    "Explore": {
-        "patterns": [
-            r"(面白い|興味深い|気になる|試してみたい)",
-            r"(新しい|新機能|最新|トレンド|話題)",
-            r"(学んだ|調べた|発見|気づき|へえ|ほう)",
-            r"(可能性|潜在|応用|使えそう|活かせる)",
-            r"(どうなんだろ|どんな感じ|試してみよう|やってみたい)",
-            r"(実験|プロトタイプ|PoC|アイデア|ひらめき)",
-            r"(勉強|インプット|読んだ|調査|リサーチ)",
-        ],
-        "weights": [2, 2, 2, 2, 2, 2, 2],
-    },
-    "Stability": {
-        "patterns": [
-            r"(いつも通り|通常通り|今まで通り|例年通り)",
-            r"(安定|継続|維持|キープ|持続)",
-            r"(ルール|規則|ポリシー|基準|ガイドライン)",
-            r"(慣れ|習慣|定常|定例|定期)",
-            r"(変えない|変えず|今のまま|現状維持)",
-            r"(確実に|着実に|堅実に|丁寧に)",
-            r"(実績|前例|経験|過去に|これまでも)",
-        ],
-        "weights": [2, 2, 2, 2, 3, 2, 2],
-    },
+# 思考軸（6軸）
+THINK_STYLE_LABELS = [
+    "Structural_Thinking",     # 構造思考性
+    "Abstractness",           # 抽象度
+    "Multi_Perspective",      # 多角性
+    "Self_Reflection",        # 内省性
+    "Future_Oriented",        # 未来志向性
+    "Risk_Awareness",         # リスク感知性
+]
+
+THINK_STYLE_DISPLAY = {
+    "Structural_Thinking": "構造思考性",
+    "Abstractness": "抽象度",
+    "Multi_Perspective": "多角性",
+    "Self_Reflection": "内省性",
+    "Future_Oriented": "未来志向性",
+    "Risk_Awareness": "リスク感知性",
 }
 
 
-def _compile_rules(rules_dict: Dict) -> Dict:
-    compiled = {}
-    for label, cfg in rules_dict.items():
-        compiled[label] = {
-            "patterns": [
-                re.compile(p, re.IGNORECASE | re.MULTILINE)
-                for p in cfg.get("patterns", [])
-            ],
-            "weights": cfg.get("weights", [1] * len(cfg.get("patterns", []))),
-            "bonus_patterns": [
-                re.compile(p, re.IGNORECASE | re.MULTILINE)
-                for p in cfg.get("bonus_patterns", [])
-            ],
-            "bonus_weights": cfg.get("bonus_weights", []),
-        }
-    return compiled
+# ─────────────────────────────────────
+# 詳細マーカー辞書
+# ─────────────────────────────────────
+
+MARKERS = {
+    # ===== 1. 主導性 =====
+    "directive": ["して", "してください", "しよう", "やりましょう", "行きます", "やって"],
+    "assertive": ["決める", "決定", "確定", "〜だ", "〜である"],
+    "proposal": ["結論", "方針", "次は", "まず", "方針は"],
+    
+    # ===== 2. 協調性 =====
+    "collaborative": ["一緒に", "合わせて", "すり合わせ", "合意", "認識合わせ", "協力"],
+    "options": ["もあり", "選択肢", "どちらか", "案"],
+    "seek_opinion": ["どう思う", "意見", "考え", "どうでしょう", "どうかな"],
+    
+    # ===== 3. 傾聴性 =====
+    "question_deep": ["なぜ", "どうやって", "具体的には", "背景は", "前提は", "理由は"],
+    "question_clarify": ["教えて", "詳しく", "もう少し", "意図は", "確認", "聞きたい"],
+    "question_emotion": ["困ってる", "大変", "どう感じ", "気持ち"],
+    
+    # ===== 4. 論理表出性 =====
+    "structure": ["まず", "次に", "つまり", "結論", "根拠", "前提", "整理"],
+    "causal": ["なので", "したがって", "なぜなら", "だから", "故に", "ため"],
+    "analytical": ["要点", "因果", "仮説", "検証", "分析", "論理"],
+    
+    # ===== 5. 感情表出性 =====
+    "emotion_positive": ["嬉しい", "楽しい", "好き", "ワクワク", "最高", "幸せ", "よかった"],
+    "emotion_negative": ["不安", "つらい", "悲しい", "ムカつく", "焦る", "モヤモヤ", "困る"],
+    "emotion_neutral": ["感じる", "思う", "気持ち"],
+    "subjective": ["個人的に", "私は", "正直", "自分的に"],
+    
+    # ===== 6. 配慮・共感性 =====
+    "empathy": ["わかる", "なるほど", "たしかに", "それな", "同意", "うんうん"],
+    "care": ["お気持ち", "大変", "無理ない", "助かる", "気をつけて", "無理しないで"],
+    "thanks": ["ありがとう", "ありがと", "感謝", "サンキュー", "ありです"],
+    "apology": ["すみません", "ごめん", "申し訳", "失礼", "すまん"],
+    "cushion": ["もしよければ", "差し支えなければ", "恐縮", "お手数", "できれば"],
+    
+    # ===== 7. 簡潔性（参考） =====
+    "digression": ["ちなみに", "余談", "話はそれます"],
+    "connector": ["あと", "それと", "ついでに"],
+       
+    # ===== 8. 構造思考性 =====
+    "classification": [
+        "分類", "要素", "観点", "軸", "カテゴリ", "種類",
+        # ✅ 追加：より一般的な言葉
+        "パターン", "タイプ", "グループ", "分けると", "2つ", "3つ",
+    ],
+    "framework": [
+        "KPI", "KGI", "フレーム", "ポイント", "体系",
+        # ✅ 追加
+        "整理すると", "まとめると", "分けて", "ステップ",
+    ],
+    "hierarchy": [
+        "大枠", "詳細", "上位", "下位", "中でも", "階層",
+        # ✅ 追加
+        "全体", "部分", "メイン", "サブ",
+    ],
+    
+    # ===== 10. 多角性 =====
+    "perspective": [
+        "一方で", "別の観点", "逆に", "他方", "視点", "見方",
+        # ✅ 追加
+        "別の", "もう一つ", "他の", "反対",
+    ],
+    "multiple_options": [
+        "メリデメ", "メリット", "デメリット", "トレードオフ", "両面",
+        # ✅ 追加
+        "良い点", "悪い点", "利点", "欠点", "両方",
+    ],
+    "anticipate": [
+        "という見方", "ただし", "反論", "懸念", "考慮",
+        # ✅ 追加
+        "でも", "しかし", "とはいえ", "ただ",
+    ],
+    
+    # ===== 11. 内省性 =====
+    "self_reference": [
+        "私は", "自分は", "自分としては", "個人的", "僕は", "俺は",
+        # ✅ 追加（これは既に十分かも）
+    ],
+    "mental_process": [
+        "気づいた", "感じた", "迷う", "大事にしたい", "思った",
+        # ✅ 追加
+        "考えた", "悩む", "迷ってる", "わからない",
+    ],
+    "self_improvement": [
+        "苦手", "課題", "改善したい", "伸ばしたい", "振り返る", "反省",
+        # ✅ 追加
+        "直したい", "変えたい", "成長", "学び",
+    ],
+    
+    # ===== 12. 未来志向性 =====
+    "future_time": [
+        "今後", "将来", "これから", "次に", "中長期", "先",
+        # ✅ 追加
+        "明日", "来週", "来月", "来年", "後で", "いつか",
+    ],
+    "planning": [
+        "目指す", "ロードマップ", "スケジュール", "プラン", "ゴール", "計画",
+        # ✅ 追加
+        "予定", "準備", "段取り", "やること",
+    ],
+    "possibility": [
+        "できそう", "なりうる", "可能性", "想定", "見込み",
+        # ✅ 追加
+        "かも", "できる", "なるかも", "いけそう",
+    ],
+    
+    # ===== 13. リスク感知性 =====
+    "risk": [
+        "リスク", "懸念", "問題", "炎上", "批判", "副作用", "危険",
+        # ✅ 追加
+        "心配", "不安", "怖い", "まずい", "ヤバい",
+    ],
+    "conditional": [
+        "ただし", "場合によって", "依存する", "条件", "もし",
+        # ✅ 追加
+        "次第", "によって", "なら", "だったら",
+    ],
+    "failure": [
+        "最悪", "詰む", "破綻", "漏洩", "失敗", "ダメ",
+        # ✅ 追加
+        "無理", "できない", "厳しい", "間に合わない",
+    ],
+}
 
 
-_COMM_COMPILED = _compile_rules(COMM_STYLE_RULES)
-_THINK_COMPILED = _compile_rules(THINK_STYLE_RULES)
+# ─────────────────────────────────────
+# 特徴量抽出
+# ─────────────────────────────────────
+
+def count_emoji(text: str) -> int:
+    """絵文字の数をカウント（簡易版）"""
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # 顔文字
+        "\U0001F300-\U0001F5FF"  # 記号
+        "\U0001F680-\U0001F6FF"  # 交通
+        "\U0001F1E0-\U0001F1FF"  # 旗
+        "]+",
+        flags=re.UNICODE
+    )
+    return len(emoji_pattern.findall(text))
 
 
-def _score_text(text: str, compiled_rules: Dict) -> Dict[str, float]:
+def extract_features(text: str) -> dict:
+    """
+    テキストから詳細な特徴量を抽出
+    """
+    text_lower = text.lower()
+    
+    features = {
+        "char_count": len(text),
+        "sentence_count": max(1, text.count("。") + text.count(".") + text.count("\n")),
+    }
+    
+    # 質問マーク
+    features["question_mark"] = text.count("?") + text.count("？")
+    
+    # 感嘆符（cap付き）
+    features["exclaim"] = min(text.count("!") + text.count("！"), 3)
+    
+    # 絵文字（cap付き）
+    features["emoji_count"] = min(count_emoji(text), 3)
+    
+    # 笑い記号（cap付き）
+    laugh_count = text.lower().count("笑") + text.lower().count("w")
+    features["laugh"] = min(laugh_count, 3)
+    
+    # 箇条書きマーカー
+    list_markers = ["1.", "2.", "3.", "①", "②", "③", "- ", "・"]
+    features["list_marker"] = sum(1 for m in list_markers if m in text)
+    
+    # 各マーカーカテゴリのカウント
+    for category, words in MARKERS.items():
+        count = sum(1 for word in words if word in text_lower)
+        features[f"marker_{category}"] = count
+    
+    # 敬語率（補助指標）
+    polite_patterns = ["です", "ます", "ください", "いたします"]
+    polite_count = sum(text.count(p) for p in polite_patterns)
+    features["polite_count"] = polite_count
+    
+    # 数字の出現（具体性の指標）
+    features["number_count"] = len(re.findall(r'\d+', text))
+    
+    return features
+
+
+# ─────────────────────────────────────
+# スコア計算
+# ─────────────────────────────────────
+
+def calculate_axis_scores(messages: list) -> dict:
+    """
+    メッセージリストから13軸のスコア（割合）を計算
+    
+    戻り値: {
+        "Lead_Directiveness": 0.23,  # 23%
+        ...
+    }
+    """
+    if not messages:
+        return {axis: 0.0 for axis in COMM_STYLE_LABELS + THINK_STYLE_LABELS}
+    
+    total_count = len(messages)
+    total_chars = sum(len(m.get("text", "")) for m in messages)
+    
+    # 全メッセージの特徴量を集計
+    features_sum = defaultdict(float)
+    for msg in messages:
+        feats = extract_features(msg.get("text", ""))
+        for key, val in feats.items():
+            features_sum[key] += val
+    
     scores = {}
-    for label, cfg in compiled_rules.items():
-        score = 0.0
-        for pat, w in zip(cfg["patterns"], cfg["weights"]):
-            if pat.search(text):
-                score += w
-        for pat, w in zip(cfg["bonus_patterns"], cfg["bonus_weights"]):
-            if pat.search(text):
-                score += w
-        scores[label] = score
+    
+    # ===== 1. 主導性 =====
+    directive = features_sum["marker_directive"] + features_sum["marker_assertive"]
+    directive += features_sum["marker_proposal"] * 1.5
+    # 質問が多いと下がる
+    directive -= features_sum["question_mark"] * 0.3
+    scores["Lead_Directiveness"] = max(0, directive / total_count)
+    
+    # ===== 2. 協調性 =====
+    collab = features_sum["marker_collaborative"] * 1.5
+    collab += features_sum["marker_options"] + features_sum["marker_seek_opinion"]
+    scores["Collaboration"] = collab / total_count
+    
+    # ===== 3. 傾聴性 =====
+    listening = features_sum["question_mark"] * 1.2
+    listening += features_sum["marker_question_deep"] * 2
+    listening += features_sum["marker_question_clarify"] * 1.5
+    listening += features_sum["marker_question_emotion"]
+    scores["Active_Listening"] = listening / total_count
+    
+    # ===== 4. 論理表出性 =====
+    logical = features_sum["marker_structure"] * 1.5
+    logical += features_sum["marker_causal"] * 1.2
+    logical += features_sum["marker_analytical"]
+    logical += features_sum["list_marker"] * 0.5
+    scores["Logical_Expression"] = logical / total_count
+    
+    # ===== 5. 感情表出性 =====
+    emotional = features_sum["marker_emotion_positive"]
+    emotional += features_sum["marker_emotion_negative"]
+    emotional += features_sum["marker_emotion_neutral"] * 0.8
+    emotional += features_sum["marker_subjective"] * 0.5
+    # 記号は cap 適用済み、低ウェイト
+    emotional += (features_sum["exclaim"] + features_sum["emoji_count"] + features_sum["laugh"]) * 0.2
+    scores["Emotional_Expression"] = emotional / total_count
+    
+    # ===== 6. 配慮・共感性 =====
+    empathy = features_sum["marker_empathy"] * 1.5
+    empathy += features_sum["marker_care"] * 1.2
+    empathy += features_sum["marker_thanks"] * 1.2
+    empathy += features_sum["marker_apology"]
+    empathy += features_sum["marker_cushion"] * 1.3
+    # 敬語は補助（低ウェイト）
+    empathy += features_sum["polite_count"] * 0.05
+    scores["Empathy_Care"] = empathy / total_count
+    
+    # ===== 7. 簡潔性（参考） =====
+    avg_chars = total_chars / total_count if total_count > 0 else 0
+    # 100文字を基準に正規化（短いほど高い）
+    brevity = 1.0 - min(avg_chars / 100, 1.0)
+    # 余談マーカーがあると下がる
+    brevity -= features_sum["marker_digression"] / total_count * 0.2
+    scores["Brevity"] = max(0, brevity)
+    
+    # ===== 8. 構造思考性 =====
+    structural = features_sum["marker_classification"] * 1.5
+    structural += features_sum["marker_framework"] * 1.3
+    structural += features_sum["marker_hierarchy"]
+    scores["Structural_Thinking"] = structural / total_count
+    
+    # ===== 9. 抽象度（差分） =====
+    abstract = features_sum["marker_abstract"]
+    concrete = features_sum["marker_concrete"] + features_sum["number_count"] * 0.2
+
+    # ✅ 修正：マーカーがない場合は低スコアにする
+    if abstract == 0 and concrete == 0:
+        # どちらもない場合は中立（具体的でも抽象的でもない）
+        scores["Abstractness"] = 0.1  # 低めに設定
+    else:
+        # 差分を計算
+        abstractness_raw = (abstract - concrete) / total_count
+        # 0〜1の範囲に正規化（負の値は0、正の値は高く）
+        scores["Abstractness"] = max(0, min(1.0, abstractness_raw + 0.3))
+    
+    # ===== 10. 多角性 =====
+    multi = features_sum["marker_perspective"] * 1.5
+    multi += features_sum["marker_multiple_options"] * 1.3
+    multi += features_sum["marker_anticipate"]
+    scores["Multi_Perspective"] = multi / total_count
+    
+    # ===== 11. 内省性 =====
+    reflective = features_sum["marker_self_reference"] * 0.8
+    reflective += features_sum["marker_mental_process"] * 1.5
+    reflective += features_sum["marker_self_improvement"] * 1.8
+    scores["Self_Reflection"] = reflective / total_count
+    
+    # ===== 12. 未来志向性 =====
+    future = features_sum["marker_future_time"] * 1.2
+    future += features_sum["marker_planning"] * 1.5
+    future += features_sum["marker_possibility"]
+    scores["Future_Oriented"] = future / total_count
+    
+    # ===== 13. リスク感知性 =====
+    risk = features_sum["marker_risk"] * 1.5
+    risk += features_sum["marker_conditional"]
+    risk += features_sum["marker_failure"] * 1.2
+    # 対策語があると健全（少し加点）
+    risk += features_sum["marker_countermeasure"] * 0.5
+    scores["Risk_Awareness"] = risk / total_count
+    
     return scores
 
 
-def classify_message(text: str) -> Tuple:
+def calculate_confidence(msg_count: int, char_count: int) -> float:
     """
-    戻り値: (style_primary, think_primary, style_scores, think_scores)
+    信頼度を計算（0.0〜1.0）
+    メッセージ数と文字数の両方を考慮
     """
-    style_scores = _score_text(text, _COMM_COMPILED)
-    think_scores = _score_text(text, _THINK_COMPILED)
+    # メッセージ数ベース（最低20件、理想200件以上）
+    msg_factor = min(1.0, msg_count / 200)
+    
+    # 文字数ベース（最低500文字、理想5000文字以上）
+    char_factor = min(1.0, char_count / 5000)
+    
+    # 両方の平均
+    confidence = (msg_factor + char_factor) / 2
+    
+    return round(confidence, 2)
 
-    style_max = max(style_scores.values()) if style_scores else 0
-    think_max = max(think_scores.values()) if think_scores else 0
 
-    style_primary = "SmallTalk" if style_max == 0 else max(style_scores, key=style_scores.get)
-    think_primary = "Other" if think_max == 0 else max(think_scores, key=think_scores.get)
+# ─────────────────────────────────────
+# 後方互換性のためのダミー関数
+# ─────────────────────────────────────
 
-    return style_primary, think_primary, style_scores, think_scores
-
-
-def classify_to_json(text: str) -> Dict:
-    sp, tp, ss, ts = classify_message(text)
+def classify_to_json(text: str) -> dict:
+    """
+    後方互換性のため（使用されていない場合は削除可能）
+    """
     return {
-        "style_primary": sp,
-        "think_primary": tp,
-        "style_score_json": json.dumps(ss, ensure_ascii=False),
-        "think_score_json": json.dumps(ts, ensure_ascii=False),
+        "comm_style": "Lead_Directiveness",
+        "think_style": "Structural_Thinking"
     }
-
-
-# ラベル一覧（順序固定）
-COMM_STYLE_LABELS = ["Ask", "Propose", "Structure", "Empathize", "Explain", "Lead", "Align", "SmallTalk"]
-THINK_STYLE_LABELS = ["Logic", "Other", "Goal", "Risk", "Explore", "Stability"]
-# 表示名（UI用）: 内部キーは英語のまま、表示だけ日本語にする
-COMM_STYLE_DISPLAY = {
-    "Ask": "質問",
-    "Propose": "提案",
-    "Structure": "構造化",
-    "Empathize": "共感",
-    "Explain": "説明",
-    "Lead": "主導",
-    "Align": "合意",
-    "SmallTalk": "雑談",
-}
-
-THINK_STYLE_DISPLAY = {
-    "Logic": "論理",
-    "Other": "他者視点",
-    "Goal": "目的志向",
-    "Risk": "リスク",
-    "Explore": "探索",
-    "Stability": "安定",
-}

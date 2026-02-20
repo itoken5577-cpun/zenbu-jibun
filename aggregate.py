@@ -1,151 +1,225 @@
 """
-aggregate.py - 集計ロジック（相手別スタイル分布・全体平均・差分）
+aggregate.py - 集計・分析（新13軸対応）
 """
-from __future__ import annotations
-
-from typing import Dict, List, Any, Tuple
-
-import pandas as pd
-
-from classify_rules import COMM_STYLE_LABELS, THINK_STYLE_LABELS
+from collections import defaultdict
+from typing import List, Dict, Any
+import json
 
 
-def build_distribution(messages: List[Dict[str, Any]]) -> Dict[str, Dict]:
+def build_distribution(messages: List[Dict]) -> Dict:
     """
-    戻り値:
-    {
-      "global": {"style_dist": {...}, "think_dist": {...}, "count": N},
-      "<counterparty>": {...},
-      ...
+    メッセージから相手別・グローバルの分布を計算
+    新13軸対応版
+    """
+    from classify_rules import (
+        calculate_axis_scores,
+        calculate_confidence,
+        COMM_STYLE_LABELS,
+        THINK_STYLE_LABELS,
+    )
+    
+    result = {}
+    
+    # 自分のメッセージのみ
+    my_messages = [m for m in messages if m.get("is_me")]
+    
+    if not my_messages:
+        return {"global": {"count": 0}}
+    
+    # ===== グローバル集計 =====
+    global_scores = calculate_axis_scores(my_messages)
+    global_confidence = calculate_confidence(
+        len(my_messages),
+        sum(len(m.get("text", "")) for m in my_messages)
+    )
+    
+    # コミュニケーションと思考に分ける
+    comm_dist = {k: global_scores[k] for k in COMM_STYLE_LABELS}
+    think_dist = {k: global_scores[k] for k in THINK_STYLE_LABELS}
+    
+    result["global"] = {
+        "count": len(my_messages),
+        "style_dist": comm_dist,
+        "think_dist": think_dist,
+        "confidence": global_confidence,
     }
-    """
-    if not messages:
-        return {"global": _empty_dist(0)}
-
-    df = pd.DataFrame(messages)
-    df = df.dropna(subset=["style_primary", "think_primary"])
-    if df.empty:
-        return {"global": _empty_dist(0)}
-
-    result: Dict[str, Dict] = {}
-    result["global"] = _calc_dist(df)
-    for cp in df["counterparty"].unique():
-        result[cp] = _calc_dist(df[df["counterparty"] == cp])
-
+    
+    # ===== 相手別集計 =====
+    by_counterparty = defaultdict(list)
+    for m in my_messages:
+        cp = m.get("counterparty", "unknown")
+        by_counterparty[cp].append(m)
+    
+    for cp, cp_messages in by_counterparty.items():
+        cp_scores = calculate_axis_scores(cp_messages)
+        cp_confidence = calculate_confidence(
+            len(cp_messages),
+            sum(len(m.get("text", "")) for m in cp_messages)
+        )
+        
+        comm_dist_cp = {k: cp_scores[k] for k in COMM_STYLE_LABELS}
+        think_dist_cp = {k: cp_scores[k] for k in THINK_STYLE_LABELS}
+        
+        result[cp] = {
+            "count": len(cp_messages),
+            "style_dist": comm_dist_cp,
+            "think_dist": think_dist_cp,
+            "confidence": cp_confidence,
+        }
+    
     return result
 
 
-def _empty_dist(count: int) -> Dict:
-    return {
-        "style_dist": {k: 0.0 for k in COMM_STYLE_LABELS},
-        "think_dist": {k: 0.0 for k in THINK_STYLE_LABELS},
-        "count": count,
-    }
-
-
-def _calc_dist(df: pd.DataFrame) -> Dict:
-    count = len(df)
-    if count == 0:
-        return _empty_dist(0)
-
-    style_counts = df["style_primary"].value_counts()
-    think_counts = df["think_primary"].value_counts()
-
-    style_dist = {
-        label: float(round(style_counts.get(label, 0) / count, 4))
-        for label in COMM_STYLE_LABELS
-    }
-    think_dist = {
-        label: float(round(think_counts.get(label, 0) / count, 4))
-        for label in THINK_STYLE_LABELS
-    }
-
-    return {
-        "style_dist": style_dist,
-        "think_dist": think_dist,
-        "count": int(count),
-    }
-
-
-def calc_diff_from_global(dist_result: Dict[str, Dict]) -> Dict[str, Dict]:
-    """各 counterparty の全体平均との差分を計算"""
-    global_style = dist_result.get("global", {}).get("style_dist", {})
-    global_think = dist_result.get("global", {}).get("think_dist", {})
-
-    diffs: Dict[str, Dict] = {}
-    for cp, dist in dist_result.items():
+def calc_diff_from_global(dist_result: Dict) -> Dict:
+    """
+    各相手とグローバル平均との差分を計算
+    """
+    from classify_rules import COMM_STYLE_LABELS, THINK_STYLE_LABELS
+    
+    global_data = dist_result.get("global", {})
+    g_style = global_data.get("style_dist", {})
+    g_think = global_data.get("think_dist", {})
+    
+    diffs = {}
+    
+    for cp, cp_data in dist_result.items():
         if cp == "global":
             continue
-        style_diff = {
-            label: round(dist["style_dist"].get(label, 0) - global_style.get(label, 0), 4)
-            for label in COMM_STYLE_LABELS
+        
+        cp_style = cp_data.get("style_dist", {})
+        cp_think = cp_data.get("think_dist", {})
+        
+        # 差分計算
+        style_diffs = {k: cp_style.get(k, 0) - g_style.get(k, 0) for k in COMM_STYLE_LABELS}
+        think_diffs = {k: cp_think.get(k, 0) - g_think.get(k, 0) for k in THINK_STYLE_LABELS}
+        
+        diffs[cp] = {
+            "style_diffs": style_diffs,
+            "think_diffs": think_diffs,
+            "confidence": cp_data.get("confidence", 0),
         }
-        think_diff = {
-            label: round(dist["think_dist"].get(label, 0) - global_think.get(label, 0), 4)
-            for label in THINK_STYLE_LABELS
-        }
-        diffs[cp] = {"style_diff": style_diff, "think_diff": think_diff}
+    
     return diffs
 
 
-def top3_diff(diffs: Dict[str, Dict], counterparty: str) -> List[Dict]:
-    """指定 counterparty の差分 Top3（絶対値が大きいもの）"""
-    if counterparty not in diffs:
+def top3_diff(diffs_all: Dict, counterparty: str, top_n: int = 3) -> List[Dict]:
+    """
+    指定した相手のTop3差分を取得
+    """
+    from classify_rules import COMM_STYLE_DISPLAY, THINK_STYLE_DISPLAY
+    
+    cp_diff = diffs_all.get(counterparty)
+    if not cp_diff:
         return []
-    cp_diffs = diffs[counterparty]
-    items = []
-    for label, val in cp_diffs["style_diff"].items():
-        items.append({"label": label, "kind": "コミュニケーション", "diff": val})
-    for label, val in cp_diffs["think_diff"].items():
-        items.append({"label": label, "kind": "思考", "diff": val})
-    items.sort(key=lambda x: abs(x["diff"]), reverse=True)
-    return items[:3]
+    
+    style_diffs = cp_diff.get("style_diffs", {})
+    think_diffs = cp_diff.get("think_diffs", {})
+    
+    # 全ての差分を集める
+    all_diffs = []
+    
+    for label, diff in style_diffs.items():
+        all_diffs.append({
+            "kind": "comm",  # コミュニケーション
+            "label": label,
+            "display": COMM_STYLE_DISPLAY.get(label, label),
+            "diff": diff,
+        })
+    
+    for label, diff in think_diffs.items():
+        all_diffs.append({
+            "kind": "think",  # 思考
+            "label": label,
+            "display": THINK_STYLE_DISPLAY.get(label, label),
+            "diff": diff,
+        })
+    
+    # 絶対値の大きい順にソート
+    all_diffs.sort(key=lambda x: abs(x["diff"]), reverse=True)
+    
+    return all_diffs[:top_n]
 
 
-def build_summary_json(
-    dist_result: Dict[str, Dict],
-    diffs: Dict[str, Dict],
-    my_name: str,
-) -> Dict:
-    """外部LLMに渡す集計JSON（生ログ不含）"""
+def dist_to_dataframe(dist_result: Dict):
+    """
+    分布をDataFrameに変換（グラフ表示用）
+    """
+    import pandas as pd
+    from classify_rules import COMM_STYLE_LABELS, THINK_STYLE_LABELS
+    
+    rows_style = []
+    rows_think = []
+    
+    for cp, data in dist_result.items():
+        style_dist = data.get("style_dist", {})
+        think_dist = data.get("think_dist", {})
+        
+        row_style = {"counterparty": cp}
+        row_style.update(style_dist)
+        rows_style.append(row_style)
+        
+        row_think = {"counterparty": cp}
+        row_think.update(think_dist)
+        rows_think.append(row_think)
+    
+    df_style = pd.DataFrame(rows_style).set_index("counterparty")
+    df_think = pd.DataFrame(rows_think).set_index("counterparty")
+    
+    # カラムの順序を保証
+    df_style = df_style[[col for col in COMM_STYLE_LABELS if col in df_style.columns]]
+    df_think = df_think[[col for col in THINK_STYLE_LABELS if col in df_think.columns]]
+    
+    return df_style, df_think
+
+
+def build_summary_json(dist_result: Dict, diffs_all: Dict, my_name: str = "ユーザー") -> Dict:
+    """
+    LLMエクスポート用のJSONを生成
+    """
+    from classify_rules import COMM_STYLE_DISPLAY, THINK_STYLE_DISPLAY
+    
     summary = {
-        "meta": {
-            "my_name_hash": f"user_{hash(my_name) % 99999:05d}",
-            "note": "This JSON contains only aggregated statistics. No raw message content is included.",
-        },
-        "global": dist_result.get("global", {}),
-        "by_counterparty": {},
+        "user_name": my_name,
+        "global": {},
+        "counterparties": [],
     }
-    for cp, dist in dist_result.items():
+    
+    # グローバル
+    g = dist_result.get("global", {})
+    if g:
+        summary["global"] = {
+            "message_count": g.get("count", 0),
+            "confidence": g.get("confidence", 0),
+            "communication_styles": {
+                COMM_STYLE_DISPLAY[k]: round(v, 3)
+                for k, v in g.get("style_dist", {}).items()
+            },
+            "thinking_styles": {
+                THINK_STYLE_DISPLAY[k]: round(v, 3)
+                for k, v in g.get("think_dist", {}).items()
+            },
+        }
+    
+    # 相手別
+    for cp, data in dist_result.items():
         if cp == "global":
             continue
-        cp_hash = f"room_{hash(cp) % 99999:05d}"
-        summary["by_counterparty"][cp_hash] = {
-            "display_name": cp,
-            "count": dist["count"],
-            "style_dist": dist["style_dist"],
-            "think_dist": dist["think_dist"],
-            "diff_from_global": diffs.get(cp, {}),
-            "top3_diff": top3_diff(diffs, cp),
+        
+        cp_summary = {
+            "name": cp,
+            "message_count": data.get("count", 0),
+            "confidence": data.get("confidence", 0),
+            "communication_styles": {
+                COMM_STYLE_DISPLAY[k]: round(v, 3)
+                for k, v in data.get("style_dist", {}).items()
+            },
+            "thinking_styles": {
+                THINK_STYLE_DISPLAY[k]: round(v, 3)
+                for k, v in data.get("think_dist", {}).items()
+            },
+            "top3_differences": top3_diff(diffs_all, cp, 3),
         }
+        
+        summary["counterparties"].append(cp_summary)
+    
     return summary
-
-
-def dist_to_dataframe(
-    dist_result: Dict[str, Dict],
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """dist_result を pandas DataFrame に変換（可視化用）"""
-    style_rows = []
-    think_rows = []
-    for cp, dist in dist_result.items():
-        row_s = {"counterparty": cp, "count": dist["count"]}
-        row_s.update(dist["style_dist"])
-        style_rows.append(row_s)
-
-        row_t = {"counterparty": cp, "count": dist["count"]}
-        row_t.update(dist["think_dist"])
-        think_rows.append(row_t)
-
-    df_style = pd.DataFrame(style_rows).set_index("counterparty")
-    df_think = pd.DataFrame(think_rows).set_index("counterparty")
-    return df_style, df_think

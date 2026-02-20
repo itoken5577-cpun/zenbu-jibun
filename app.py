@@ -456,8 +456,10 @@ def process_files(file_pairs: List[tuple], my_name: str, min_chars: int, user_id
             if noise_flag:
                 noise_count += 1
             if is_me and not noise_flag:
-                clf = classify_to_json(proc_text)
-                label_batch.append({"message_id": row_id, **clf})
+                # 新13軸スコアを計算（1メッセージ単位）
+                from classify_rules import calculate_axis_scores
+                scores = calculate_axis_scores([{"text": proc_text}])
+                label_batch.append({"message_id": row_id, **scores})
 
         upsert_labels_batch(label_batch)
 
@@ -551,16 +553,89 @@ def render_compare_bar(cp_dist: Dict, global_dist: Dict, labels: List[str], cp_n
 
 
 def render_radar_chart(dist_a: Dict, dist_b: Dict, labels: List[str], name_a: str, name_b: str) -> None:
+    """
+    レーダーチャートを表示（改善版）
+    """
     values_a = [float(dist_a.get(l, 0)) for l in labels]
     values_b = [float(dist_b.get(l, 0)) for l in labels]
+    
+    # 閉じた図形にする
     values_a += [values_a[0]]
     values_b += [values_b[0]]
     labels_closed = labels + [labels[0]]
-
+    
+    # ラベルを改行して短くする（必要に応じて）
+    labels_display = []
+    for label in labels_closed:
+        # 長いラベルは改行
+        if len(label) > 6:
+            # 適切な位置で改行
+            if "・" in label:
+                label = label.replace("・", "<br>")
+            elif len(label) > 8:
+                mid = len(label) // 2
+                label = label[:mid] + "<br>" + label[mid:]
+        labels_display.append(label)
+    
     fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(r=values_a, theta=labels_closed, fill='toself', name=name_a))
-    fig.add_trace(go.Scatterpolar(r=values_b, theta=labels_closed, fill='toself', name=name_b))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), showlegend=True, height=400)
+    
+    # トレース1（相手）
+    fig.add_trace(go.Scatterpolar(
+        r=values_a,
+        theta=labels_display,
+        fill='toself',
+        name=name_a,
+        line=dict(color='#667eea', width=2),
+        fillcolor='rgba(102, 126, 234, 0.3)',
+    ))
+    
+    # トレース2（全体平均）
+    fig.add_trace(go.Scatterpolar(
+        r=values_b,
+        theta=labels_display,
+        fill='toself',
+        name=name_b,
+        line=dict(color='#cccccc', width=2),
+        fillcolor='rgba(204, 204, 204, 0.2)',
+    ))
+    
+    # レイアウト設定
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1],
+                # 目盛りを明示的に設定
+                tickmode='linear',
+                tick0=0,
+                dtick=0.2,  # 0.2刻み（20%）
+                tickformat='.0%',  # パーセント表示
+                tickfont=dict(size=10),
+                gridcolor='rgba(0,0,0,0.1)',
+                gridwidth=1,
+            ),
+            angularaxis=dict(
+                # ラベル設定
+                tickfont=dict(size=11),
+                rotation=90,  # 回転
+            ),
+            bgcolor='rgba(255,255,255,0.9)',
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=11),
+        ),
+        height=500,  # 高さを拡大
+        margin=dict(l=80, r=80, t=40, b=80),  # マージンを拡大
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -774,11 +849,18 @@ with tab2:
                         dv = float(item.get("diff", 0))
                         sign = "▲" if dv > 0 else "▼"
                         color = "#2563eb" if dv > 0 else "#dc2626"
-                        if item.get("kind") == "コミュニケーション":
-                            display_name = COMM_STYLE_DISPLAY.get(item.get("label"), item.get("label"))
+                        
+                        # ✅ display フィールドを使う（既に日本語化済み）
+                        display_name = item.get("display", item.get("label", ""))
+                        
+                        # kind も日本語化
+                        kind_raw = item.get("kind", "")
+                        if kind_raw == "comm":
+                            kind_label = "コミュニケーション"
+                        elif kind_raw == "think":
+                            kind_label = "思考"
                         else:
-                            display_name = THINK_STYLE_DISPLAY.get(item.get("label"), item.get("label"))
-                        kind_label = item.get("kind", "")
+                            kind_label = kind_raw
                         with cols3[i]:
                             html = f"""<div style="background:#f8f9ff;border:1px solid #e8eaf6;border-radius:12px;padding:16px 18px;text-align:center;">
                             <div style="font-size:0.75rem;color:#888;">{kind_label}スタイル</div>
@@ -786,21 +868,24 @@ with tab2:
                             <div style="font-size:1.05rem;color:{color};font-weight:700;">{sign}{abs(dv):.1%}</div></div>"""
                             components.html(html, height=120)
 
-                st.markdown("#### 🕸️ レーダー（相手 vs 全体平均）")
+                st.markdown("#### 🕸️ レーダーチャート比較（相手 vs 全体平均）")
+                st.caption("💡 外側に行くほど高スコア｜青=この相手、灰=全体平均")
+
                 col_r1, col_r2 = st.columns(2)
+
                 with col_r1:
-                    st.caption("コミュニケーションスタイル")
+                    st.markdown("**📊 コミュニケーションスタイル**")
                     comm_labels_disp = [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS]
                     cp_comm = {COMM_STYLE_DISPLAY[k]: float(cp_data.get("style_dist", {}).get(k, 0)) for k in COMM_STYLE_LABELS}
                     g_comm = {COMM_STYLE_DISPLAY[k]: float(g_data.get("style_dist", {}).get(k, 0)) for k in COMM_STYLE_LABELS}
                     render_radar_chart(cp_comm, g_comm, comm_labels_disp, f"「{sel}」", "全体平均")
+
                 with col_r2:
-                    st.caption("思考スタイル")
+                    st.markdown("**🧠 思考スタイル**")
                     think_labels_disp = [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS]
                     cp_think = {THINK_STYLE_DISPLAY[k]: float(cp_data.get("think_dist", {}).get(k, 0)) for k in THINK_STYLE_LABELS}
                     g_think = {THINK_STYLE_DISPLAY[k]: float(g_data.get("think_dist", {}).get(k, 0)) for k in THINK_STYLE_LABELS}
                     render_radar_chart(cp_think, g_think, think_labels_disp, f"「{sel}」", "全体平均")
-
                 st.markdown("#### コミュニケーションスタイル 比較")
                 render_compare_bar(cp_data.get("style_dist", {}), g_data.get("style_dist", {}), COMM_STYLE_LABELS, sel)
                 st.markdown("#### 思考スタイル 比較")

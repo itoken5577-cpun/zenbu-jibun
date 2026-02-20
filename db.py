@@ -19,53 +19,54 @@ def _has_column(conn: sqlite3.Connection, table: str, col: str) -> bool:
     return col in cols
 
 
-def init_db() -> None:
-    with get_connection() as conn:
-        # 1) テーブル作成（user_id は最初から持たせる）
-        conn.executescript(
-            """
+def init_db(db_path: Path = DB_PATH) -> None:
+    """データベースとテーブルを初期化"""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        
+        # messages テーブル
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
+                user_id TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL,
                 counterparty TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                speaker TEXT NOT NULL,
-                is_me INTEGER NOT NULL,
-                text TEXT NOT NULL
-            );
-
+                timestamp TEXT,
+                speaker TEXT,
+                is_me INTEGER,
+                text TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        
+        # インデックス
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_user ON messages(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_source ON messages(source)")
+        
+        # labels テーブル
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS labels (
                 message_id INTEGER PRIMARY KEY,
                 style_primary TEXT,
                 think_primary TEXT,
-                style_score_json TEXT,
-                think_score_json TEXT,
+                style_scores TEXT,
+                think_scores TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_messages_user_id       ON messages(user_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_source        ON messages(source);
-            CREATE INDEX IF NOT EXISTS idx_messages_counterparty  ON messages(counterparty);
-            CREATE INDEX IF NOT EXISTS idx_messages_is_me         ON messages(is_me);
-            """
-        )
-
-        # 2) 既存DB（user_id無し）からの移行も一応ケア
-        #    ※ 以前に user_id 無しで作ったDBが残ってる場合向け
-        if not _has_column(conn, "messages", "user_id"):
-            conn.execute("ALTER TABLE messages ADD COLUMN user_id TEXT;")
-            conn.execute("UPDATE messages SET user_id = 'legacy' WHERE user_id IS NULL;")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);")
-
+            )
+        """)
+        
         conn.commit()
-
-def init_db(db_path: Path = DB_PATH) -> None:
-    with get_connection(db_path) as conn:
-        # ... 既存のコード ...
-        conn.commit()
+        conn.close()
+        
+        print("✅ データベース初期化成功")
+        
+    except Exception as e:
+        print(f"❌ データベース初期化エラー: {e}")
+        raise
     
-    # ✅ ここに追加（インデントに注意：関数の中の一番最後）
+    # users テーブルの初期化
     init_users_table(db_path)
 
 
@@ -123,38 +124,108 @@ def upsert_messages_batch(rows: List[Dict[str, Any]]) -> List[int]:
         return ids
 
 
-def upsert_labels_batch(label_rows: List[Dict[str, Any]]) -> None:
+def upsert_labels_batch(label_rows: List[Dict[str, Any]], db_path: Path = DB_PATH) -> None:
+    """
+    ラベルをバッチで保存（新13軸対応）
+    label_rows: [{"message_id": int, "軸名": スコア, ...}, ...]
+    """
     if not label_rows:
         return
-
-    with get_connection() as conn:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO labels
-                (message_id, style_primary, think_primary, style_score_json, think_score_json)
-            VALUES
-                (:message_id, :style_primary, :think_primary, :style_score_json, :think_score_json)
-            """,
-            label_rows,
-        )
+    
+    from classify_rules import COMM_STYLE_LABELS, THINK_STYLE_LABELS
+    
+    with get_connection(db_path) as conn:
+        # 既存のラベルテーブルを使用（柔軟に対応）
+        for row in label_rows:
+            msg_id = row.get("message_id")
+            if not msg_id:
+                continue
+            
+            # 13軸のスコアを JSON として保存
+            import json
+            
+            comm_scores = {k: row.get(k, 0.0) for k in COMM_STYLE_LABELS}
+            think_scores = {k: row.get(k, 0.0) for k in THINK_STYLE_LABELS}
+            
+            # 後方互換性のため、旧形式のカラムにも保存
+            # 最大スコアの軸を primary とする
+            style_primary = max(comm_scores, key=comm_scores.get) if comm_scores else "Lead_Directiveness"
+            think_primary = max(think_scores, key=think_scores.get) if think_scores else "Structural_Thinking"
+            
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO labels 
+                (message_id, style_primary, think_primary, style_scores, think_scores)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    msg_id,
+                    style_primary,
+                    think_primary,
+                    json.dumps(comm_scores),
+                    json.dumps(think_scores),
+                ),
+            )
+        
         conn.commit()
 
 
-def fetch_my_messages_with_labels(user_id: str) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
+def fetch_my_messages_with_labels(user_id: str, db_path: Path = DB_PATH) -> List[Dict[str, Any]]:
+    """
+    ユーザーの全メッセージをラベル付きで取得（新13軸対応）
+    """
+    with get_connection(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT
-                m.id, m.user_id, m.source, m.counterparty, m.timestamp, m.speaker, m.is_me, m.text,
-                l.style_primary, l.think_primary, l.style_score_json, l.think_score_json
+            SELECT 
+                m.id, m.source, m.counterparty, m.timestamp, 
+                m.speaker, m.is_me, m.text,
+                l.style_primary, l.think_primary,
+                l.style_scores, l.think_scores
             FROM messages m
             LEFT JOIN labels l ON m.id = l.message_id
-            WHERE m.is_me = 1 AND m.user_id = ?
-            ORDER BY m.counterparty, m.timestamp
+            WHERE m.user_id = ?
+            ORDER BY m.timestamp
             """,
             (user_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+    
+    result = []
+    for row in rows:
+        msg = {
+            "id": row["id"],
+            "source": row["source"],
+            "counterparty": row["counterparty"],
+            "timestamp": row["timestamp"],
+            "speaker": row["speaker"],
+            "is_me": row["is_me"],
+            "text": row["text"],
+            "style_primary": row["style_primary"],
+            "think_primary": row["think_primary"],
+        }
+        
+        # JSON スコアをパース
+        if row["style_scores"]:
+            import json
+            try:
+                msg["style_scores"] = json.loads(row["style_scores"])
+            except:
+                msg["style_scores"] = {}
+        else:
+            msg["style_scores"] = {}
+        
+        if row["think_scores"]:
+            import json
+            try:
+                msg["think_scores"] = json.loads(row["think_scores"])
+            except:
+                msg["think_scores"] = {}
+        else:
+            msg["think_scores"] = {}
+        
+        result.append(msg)
+    
+    return result
 
 
 def fetch_sources(user_id: str) -> List[str]:
