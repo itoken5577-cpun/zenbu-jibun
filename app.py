@@ -595,6 +595,49 @@ def render_style_guide_card(key: str, data: dict) -> None:
                     unsafe_allow_html=True,
                 )
 
+def render_top3_summary_for_guide(user_id: str) -> None:
+    """スタイルガイド冒頭に表示する：あなたのTop3（全体=global）"""
+    messages = fetch_my_messages_with_labels(user_id)
+    if not messages:
+        st.info("データがないため、Top3は表示できません。まずは「取り込み」タブでLINEログを取り込んでください。")
+        st.divider()
+        return
+
+    dr = build_distribution(messages)
+    g = dr.get("global", {})
+    sd = g.get("style_dist", {}) or {}
+    td = g.get("think_dist", {}) or {}
+
+    top_comm = sorted(sd.items(), key=lambda x: float(x[1]), reverse=True)[:3] if sd else []
+    top_think = sorted(td.items(), key=lambda x: float(x[1]), reverse=True)[:3] if td else []
+
+    st.subheader("あなたの全体傾向（Top3）")
+    st.caption("※ 全トークルームを合算した傾向（global）です。単位：%")
+    col1, col2 = st.columns(2)
+
+    def fmt_pct(v: float) -> str:
+        return f"{float(v) * 100:.1f}%"
+
+    with col1:
+        st.markdown("### 🗣️ コミュニケーション Top3")
+        if not top_comm:
+            st.write("—")
+        else:
+            for i, (k, v) in enumerate(top_comm, 1):
+                name = COMM_STYLE_DISPLAY.get(k, k)
+                st.markdown(f"**{i}. {name}**　{fmt_pct(v)}")
+
+    with col2:
+        st.markdown("### 🧠 思考 Top3")
+        if not top_think:
+            st.write("—")
+        else:
+            for i, (k, v) in enumerate(top_think, 1):
+                name = THINK_STYLE_DISPLAY.get(k, k)
+                st.markdown(f"**{i}. {name}**　{fmt_pct(v)}")
+
+    st.divider()
+
 
 def render_style_guide_tab() -> None:
     st.header("スタイルガイド")
@@ -895,4 +938,5 @@ with tab3:
 
 # Tab 4: スタイルガイド
 with tab4:
+    render_top3_summary_for_guide(USER_ID)
     render_style_guide_tab()
