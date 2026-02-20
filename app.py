@@ -829,12 +829,47 @@ with tab2:
             sel = st.selectbox("分析するトークルームを選択", ["（全相手を比較）"] + counterparties)
             if sel == "（全相手を比較）":
                 tab_cs, tab_ts = st.tabs(["コミュニケーションスタイル", "思考スタイル"])
+
+                def render_table_with_global_fixed(df: pd.DataFrame, labels: List[str], rename_map: Dict[str, str]):
+                    table = df[labels].rename(columns=rename_map).copy()
+
+                    # global 行とそれ以外に分割
+                    global_row = table.loc[["global"]] if "global" in table.index else None
+                    others = table.drop(index=["global"], errors="ignore")
+
+                    # ✅ 固定表示：global（1行だけ）
+                    if global_row is not None:
+                        st.caption("📌 global（全体平均）は固定表示")
+                        st.dataframe(
+                            global_row,
+                            use_container_width=True,
+                            hide_index=False,
+                            column_config={
+                                col: st.column_config.NumberColumn(format="%.1f%%")
+                                for col in global_row.columns
+                            },
+                        )
+                        st.markdown("")
+
+                    # ✅ ソート可能：残り
+                    st.caption("⬇️ 以降はクリックで数値ソートできます")
+                    st.dataframe(
+                        others,
+                        use_container_width=True,
+                        hide_index=False,
+                        column_config={
+                            col: st.column_config.NumberColumn(format="%.1f%%")
+                            for col in others.columns
+                        },
+                    )
+
                 with tab_cs:
-                    disp = df_style[COMM_STYLE_LABELS].rename(columns=COMM_STYLE_DISPLAY).map(lambda x: f"{float(x):.1%}")
-                    st.dataframe(disp, use_container_width=True)
+                    render_table_with_global_fixed(df_style, COMM_STYLE_LABELS, COMM_STYLE_DISPLAY)
+
                 with tab_ts:
-                    disp = df_think[THINK_STYLE_LABELS].rename(columns=THINK_STYLE_DISPLAY).map(lambda x: f"{float(x):.1%}")
-                    st.dataframe(disp, use_container_width=True)
+                    render_table_with_global_fixed(df_think, THINK_STYLE_LABELS, THINK_STYLE_DISPLAY)
+
+
             else:
                 cp_data = dist_result.get(sel, {})
                 g_data = dist_result.get("global", {})
