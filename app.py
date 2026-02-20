@@ -839,6 +839,7 @@ with tab1:
 # Tab 2: 分析・可視化
 with tab2:
     st.header("コミュニケーション & 思考スタイル分析")
+    compact_mode = st.toggle("📱 スマホ表示（コンパクト）", value=True, help="凡例を縮小し、上位のみ表示して見やすくします")
     messages = fetch_my_messages_with_labels(USER_ID)
     if not messages:
         st.info("データがありません。「取り込み」タブで LINEログを取り込んでください。")
@@ -848,7 +849,18 @@ with tab2:
         df_style, df_think = dist_to_dataframe(dist_result)
         g = dist_result.get("global", {})
         counterparties = [cp for cp in dist_result.keys() if cp != "global"]
-
+        # コンパクト表示：メッセージ数が多い相手を上位Nだけに絞る
+        TOP_N = 6
+        if compact_mode:
+            # dist_result の count を使って上位Nを取る
+            cps_sorted = sorted(counterparties, key=lambda cp: dist_result.get(cp, {}).get("count", 0), reverse=True)
+            counterparties_view = cps_sorted[:TOP_N]
+        else:
+            counterparties_view = counterparties
+        # 表示用DataFrame（global + 上位N）
+        rows_keep = ["global"] + counterparties_view
+        df_style_view = df_style.loc[[r for r in rows_keep if r in df_style.index]]
+        df_think_view = df_think.loc[[r for r in rows_keep if r in df_think.index]]
         st.subheader("📈 全体サマリー")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -867,10 +879,25 @@ with tab2:
             st.metric("最頻思考スタイル", tt, f"{td.get(tt_key, 0):.0%}" if tt_key else "—")
 
         st.subheader("🎨 コミュニケーションスタイル分布")
-        render_grouped_bar(df_style.rename(columns=COMM_STYLE_DISPLAY), [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS])
-        
+        render_grouped_bar(
+            df_style_view.rename(columns=COMM_STYLE_DISPLAY),
+            [COMM_STYLE_DISPLAY[k] for k in COMM_STYLE_LABELS]
+        )
         st.subheader("🧠 思考スタイル分布")
-        render_grouped_bar(df_think.rename(columns=THINK_STYLE_DISPLAY), [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS])
+        render_grouped_bar(
+            df_think_view.rename(columns=THINK_STYLE_DISPLAY),
+            [THINK_STYLE_DISPLAY[k] for k in THINK_STYLE_LABELS]
+        )
+        chart = chart.configure_axisX(labelAngle=45)  # ← これ追加（縦すぎ防止）
+
+        # 凡例を下へ（スマホ向け）
+        chart = chart.configure_legend(
+            orient="bottom",
+            direction="horizontal",
+            titleFontSize=11,
+            labelFontSize=10,
+            columns=1
+        )
 
         st.divider()
         st.subheader("👤 相手別スタイル詳細")
